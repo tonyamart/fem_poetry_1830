@@ -1,0 +1,189 @@
+---
+title: "02_1_Vector model"
+output:
+  html_document:
+    df_print: paged
+---
+
+This notebook shows vector model training from the full poetic subcorpus of the Russian National corpus. Poems spanning from 1780 to 1850, so that the corpus comprises large amount of data with some female authors poems as well. Corpus size:   
+After the model is created, lists of most similar words to key notions are pulled for further analysis.
+
+```{r, echo=TRUE, comment=FALSE, include=TRUE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(magrittr)
+library(devtools)
+library(tsne)
+library(lsa)
+
+library(wordVectors)
+```
+
+The way the corpus was created. As NKRJA is copyrighted, the modeling-data vector can be found in the next chunk.
+```{r, eval=FALSE, include=TRUE}
+load("/Users/tonya/Downloads/ru19_fin.rda")
+# NKRJA is copyrighted so this file is not available
+
+# glimpse(ru19_fin)
+# how the vector was done: lemmatized texts from the 19th-cen. poetic corpus (1st half) were taken alone and reshuffled
+
+to_vector <- ru19_fin %>%
+  filter(year_end > 1779) %>%
+  select(text_lemm) %>%
+  mutate(text_lemm = str_replace_all(text_lemm, "[[:punct:]]", " "))
+
+mfw <- to_vector %>% 
+  unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  count(word, sort = T) %>% 
+  filter(n > 4) %>% 
+  select(-n)
+
+nrow(mfw) # number of words in the corpus appearing at least 5 times
+
+to_vector %>% 
+  mutate(id = row_number()) %>% 
+  unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  nrow() # corpus size before removing the long tail : 945 791 tokens
+
+to_vector %>% 
+  mutate(id = row_number()) %>% 
+  unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  right_join(mfw, by = "word") %>% 
+  nrow() # corpus size after deletion of least frequent words : 911 216
+
+t <- to_vector %>% 
+  mutate(id = row_number()) %>% 
+  unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  right_join(mfw, by = "word") %>% 
+  group_by(id) %>% 
+  mutate(text_lemm = paste0(word, collapse = " ")) %>% 
+  select(-word) %>% 
+  distinct()
+
+# resulting corpus
+head(t)
+
+to_vector <- to_vector[sample(1:nrow(t)),]
+
+head(to_vector)
+
+#write.csv(to_vector, "data/02_1_nkrja_for_w2v_cln.csv")
+```
+
+Read ready-for-modelling data
+```{r}
+to_vector <- read.csv("../data/02_1_nkrja_for_w2v_cln.csv")
+glimpse(to_vector)
+```
+
+
+Prepare files for model & clean texts
+```{r, include = TRUE}
+w2v_input <- "../data/model/w2v_nkrja_poetic.txt"
+w2v_cln <- "../data/model/w2v_nkrja_poetic_cln.txt"
+w2v_bin <- "../data/model/w2v_nkrja.bin"
+
+write_lines(x = to_vector$text_lemm, file = w2v_input)
+
+prep_word2vec(origin = w2v_input, destination = w2v_cln, lowercase = TRUE,
+              bundle_ngrams = 1)
+```
+
+Train the model
+```{r, comment=FALSE, include=FALSE}
+THREADS <- 3
+
+if (!file.exists(w2v_bin)) {
+  w2v_model <- train_word2vec(
+    w2v_cln,
+    output_file = w2v_bin,
+    vectors = 300, 
+    threads = THREADS,
+    window = 5,
+    iter = 10, # if corpus is small, more iterations might help
+    negative_samples = 10 # for small datasets sth btw 5 and 20 is recommended; large - 2 to 5
+  )
+} else {
+  w2v_model <- read.vectors(w2v_bin)
+}
+```
+
+```{r}
+w2v_model %>% plot(perplexity = 20) # perplexity is n of nearest words 
+```
+
+```{r}
+# closest words 
+w2v_model %>% closest_to("цветок", 30)
+```
+
+
+```{r}
+comparison <- w2v_model[[c("цветок","природа"),average=F]]
+
+# the 3000 most common words in the set.
+pair_comp = w2v_model[1:5000,] %>% cosineSimilarity(comparison)
+
+# top 20 closest words
+pair_comp = pair_comp[
+  rank(-pair_comp[,1])<20 |
+  rank(-pair_comp[,2])<20,
+  ]
+plot(pair_comp,type='n')
+text(pair_comp,labels=rownames(pair_comp), col = c("red", "blue"))
+```
+
+```{r}
+comparison <- w2v_model[[c("песня","молодец"),average=F]]
+
+# the 3000 most common words in the set.
+pair_comp = w2v_model[1:5000,] %>% cosineSimilarity(comparison)
+
+# top 20 closest words
+pair_comp = pair_comp[
+  rank(-pair_comp[,1])<20 |
+  rank(-pair_comp[,2])<20,
+  ]
+plot(pair_comp,type='n')
+text(pair_comp,labels=rownames(pair_comp), col = c("red", "blue"))
+```
+
+
+```{r, echo = FALSE}
+print("Lists of closest words")
+
+notions <- c("любовь", "дом", "семья", "уста", "грудь", "глаз", 
+           "цветок", "природа", "бал", "печаль", 
+           "поэт", "муза", "лира",
+           "война", "русский", "страна", "служить", "лобзание", "смерть")
+
+datalist <- list()
+x <- NULL
+
+for (i in 1:length(notions)) {
+  
+  print(w2v_model %>% closest_to(notions[i], 30))
+  x <- w2v_model %>% closest_to(notions[i], 30)
+  datalist[[i]] <- x$word
+}
+
+```
+
+```{r}
+glimpse(datalist)
+
+x <- as.tibble(do.call(rbind, datalist)) %>% mutate(notion = V1) %>% 
+  unite(words, V1:V30, sep = " ") %>% select(notion, words)
+# x
+
+write.csv(x, "../data/02_1_notions_vectors.csv")
+```
+
+
+
+
+For importing model:
+```{r, eval = FALSE, include=TRUE}
+w2v_model <- read.vectors("../data/model/w2v_nkrja.bin")
+```
+

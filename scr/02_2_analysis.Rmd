@@ -1,0 +1,548 @@
+---
+title: "03_Analysis"
+output:
+  html_document:
+    df_print: paged
+---
+
+The notebook shows the process of analysis for different metrics. The corpus comprised several author's corpora:  
+  
+  8 male authors
+- nkrja selected authors: Karamzin, Zhukovsky, Pushkin, Baratynsky, Lermontov   
+- poems published in periodicals between 1835 and 1840 by: Benediktov, Kozlov, Timofeev
+  
+  7 female authors + one mistification 
+- poems published between 1835 and 1840 by female authors: Rostopchina, Teplova,  Shakhova, Pavlova, Kul'man;  
+- poems by earlier women poets M. Pospelova and A. Bunina;  
+- mysterious "female prodigy" A. Smirnova.  
+
+```{r, echo=TRUE, comment=FALSE, include=FALSE}
+library(tidyverse)
+library(tidytext)
+
+library(ggrepel)
+library(wesanderson)
+theme_set(theme_minimal())
+```
+
+
+Basic statistics and overview of the data. Some authors have unproportionally big corpora, so I randomly select 10000 words from their corpora for further analysis.
+
+```{r}
+getwd()
+```
+
+
+```{r}
+load("../data/02_2_analysis_data_tidy.Rda")
+
+n_poems <- analysis %>% 
+  group_by(author, text_ID) %>% 
+  count() %>% 
+  ungroup() %>% 
+  group_by(author) %>% 
+  count() %>% 
+  rename(n_poems = n)
+
+n_tokens <- analysis %>% 
+  group_by(author) %>% 
+  count() %>% 
+  ungroup() %>% 
+  rename(n_tokens = n)
+
+auth_gender <- tibble(author = c("БаратынскийЕА", "Бенедиктов В.Г.", "Бунина А.",
+                                 "ЖуковскийВА", "КарамзинНМ", "Козлов И.И.", "Кульман Е.Б.",
+                                 "ЛермонтовМЮ", "Павлова К.К.", "Поспелова М.", "ПушкинАС", 
+                                 "Ростопчина Е.П.", "Смирнова А.", "Теплова Н.С.", 
+                                 "Тимофеев А.В.", "Шахова Е.Н." ),
+                      gender = c("m", "m", "f", "m", "m", "m", "f", "m", "f", 
+                                 "f", "m", "f", "f", "f", "m", "f"))
+
+base_statistics <- auth_gender %>% 
+  left_join(n_poems, by = "author") %>% 
+  left_join(n_tokens, by = "author") %>% 
+  arrange(gender, desc = T)
+
+base_statistics
+
+rm(n_poems, n_tokens, auth_gender)
+```
+
+``` {r}
+glimpse(analysis)
+
+analysis$pos %>% table()
+
+analysis %>% 
+  filter(!author %in% c("ПушкинАС", "ЖуковскийВА", "КарамзинНМ", "ЛермонтовМЮ", 
+                        "Бунина А.", "БаратынскийЕА")) %>% 
+  group_by(author) %>% 
+  count() %>% 
+  ungroup() %>% 
+  summarise(mean_corpus = mean(n))
+# mean number of words in a corpus from periodicals: ~7000 words
+
+# randomly select only 10 000 words form large corpora
+random_big <- analysis %>%
+  filter(author %in% c("ПушкинАС", "ЖуковскийВА", "КарамзинНМ", "ЛермонтовМЮ", 
+                        "Бунина А.", "БаратынскийЕА")) %>%
+  group_by(author) %>% 
+  sample_n(10000) %>% 
+  ungroup()
+
+randomized <- analysis %>% 
+  filter(!author %in% c("ПушкинАС", "ЖуковскийВА", "КарамзинНМ", "ЛермонтовМЮ", 
+                        "Бунина А.", "БаратынскийЕА")) %>% 
+  rbind(random_big) 
+
+#write.csv(randomized, "../data/02_2_random_sample_1.csv")
+```
+```{r, echo = FALSE}
+# randomized <- read.csv("../data/02_2_random_sample_1.csv")
+```
+
+```{r}
+# example for calculating proportion of POS for each author
+nouns <- randomized %>% 
+  filter(pos == "S") %>% 
+  group_by(author) %>% 
+  summarise(n_nouns = n(),
+            n_f_nouns = sum(fem),
+            prop_f_nouns = n_f_nouns/n_nouns) %>% 
+  arrange(prop_f_nouns, desc = FALSE)
+
+nouns
+```
+```{r, echo = FALSE}
+print("Proportion of feminine POS")
+
+adj <- randomized %>% 
+  filter(pos == "A") %>% 
+  group_by(author) %>% 
+  summarise(n_adj = n(),
+            n_f_adj = sum(fem),
+            prop_f_adj = n_f_adj/n_adj)
+
+# verbs & participles 
+verbs <- randomized %>% 
+  filter(pos == "V") %>% 
+  group_by(author) %>% 
+  summarise(n_verb = n(),
+            n_f_verb = sum(fem),
+            prop_f_verb = n_f_verb/n_verb)
+
+# APRO - adjectival pronouns
+# SPRO - pronouns
+apro <- randomized %>% 
+  filter(pos == "APRO") %>% 
+  group_by(author) %>% 
+  summarise(n_apro = n(), 
+            n_f_apro = sum(fem), 
+            prop_f_apro = n_f_apro/n_apro)
+
+spro <- randomized %>% 
+  filter(pos == "SPRO") %>% 
+  group_by(author) %>% 
+  summarise(n_spro = n(), 
+            n_f_spro = sum(fem), 
+            prop_f_spro = n_f_spro/n_spro)
+
+intj_temp <- randomized %>% 
+  filter(pos == "INTJ") %>% 
+  group_by(author) %>% 
+  count() 
+
+intj <- tibble(
+  author = base_statistics$author,
+  n_tokens = base_statistics$n_tokens) %>% 
+  left_join(intj_temp, by = "author") %>% 
+  group_by(author) %>% 
+  summarise(
+    n_intj = n,
+    prop_intj = n/n_tokens)
+
+morphology <- left_join(
+  base_statistics, nouns %>% select(author, prop_f_nouns), by = "author") %>% 
+  left_join(adj %>% select(author, prop_f_adj), by = "author") %>% 
+  left_join(verbs %>% select(author, prop_f_verb), by = "author") %>% 
+  left_join(apro %>% select(author, prop_f_apro), by = "author") %>% 
+  left_join(spro %>% select(author, prop_f_spro), by = "author") %>% 
+  left_join(intj %>% select(author, prop_intj), by = "author")
+
+morphology
+# write.csv(morphology, "data/morphology_random_results.csv")
+```
+
+```{r, echo = F}
+means_random <- randomized %>% 
+  filter(pos %in% c("S", "V", "A", "APRO", "SPRO")) %>% 
+  group_by(pos) %>%
+  summarise(n = n(),
+            f_pos = sum(fem),
+            proc_f = f_pos / n)
+
+total_tokens <- randomized %>%
+  count() # total tokens
+
+proc_int <- (randomized %>% filter(pos == "INTJ") %>% count()) / total_tokens[1,1]
+
+#proc_int
+
+print("Mean values for parts of speech in feminine forms")
+means_random
+```
+```{r, include = F, echo = F}
+# randomized <- read.csv("data/random_sample_1.csv")
+```
+
+```{r}
+randomized <- randomized %>% 
+  mutate(lemma = str_extract(analysis, "\\[\\{'lex': '.*?',")) %>% 
+  mutate(lemma = str_remove_all(lemma, "[[:punct:]]|lex|[[:space:]]")) 
+```
+``` {r, echo = FALSE}
+print("extract lemmas from analysis")
+randomized %>% 
+  select(word, lemma) %>% 
+  head()
+```
+
+NB! These dictionaries for abstractness / concreteness indexes were prepared by a research group from Kazan Federal University; current lists are publicly available and can be found at: https://kpfu.ru/tehnologiya-sozdaniya-semanticheskih-elektronnyh.html  
+On methodology of lists compilation see: Solovyev V.D., Volskaya Y.A., Andreeva M.I., Zaikin A.A. (2022). "Russian dictionary with concreteness/abstractness indices." Russian Journal for Linguistics, 26-2, 515-549.  
+  
+```{r}
+# Abstractness / concreteness dictionaries cleaning & merge
+dict_adj <- read.delim("../data/dicts/adj_concreteness.csv", sep = ";") %>% 
+  mutate(word = str_remove_all(word, "[[:punct:]]|[[:space:]]"), 
+         index_c_a = str_replace_all(index_c_a, ",", "\\.")) %>% 
+  mutate(index_c_a = as.numeric(index_c_a))
+dict_noun <- read.delim("../data/dicts/nouns_concreteness.csv", sep = ";") %>% 
+  mutate(word = str_remove_all(word, "[[:punct:]]|[[:space:]]"), 
+         index_c_a = str_replace_all(index_c_a, ",", "\\.")) %>% 
+  mutate(index_c_a = as.numeric(index_c_a))
+
+glimpse(dict_adj)
+glimpse(dict_noun)
+
+dictionaries <- rbind(dict_adj, dict_noun) %>% rename(lemma = word) %>% select(-score)
+
+randomized <- randomized %>% left_join(dictionaries, by = "lemma")
+```
+
+```{r, echo = FALSE}
+head(randomized)
+
+randomized %>% 
+  select(lemma, index_c_a) %>% 
+  filter(!is.na(index_c_a))
+```
+
+```{r}
+glimpse(randomized)
+
+abstract_concrete <- randomized %>% 
+  filter(!is.na(index_c_a)) %>% 
+  group_by(author) %>% 
+  summarise(mean_ac = mean(index_c_a))
+
+head(abstract_concrete, 16)
+```
+
+Add vector model lists of closely thematic words
+```{r}
+w2v_lists <- read.csv("../data/02_1_notions_vectors.csv")
+head(w2v_lists)
+```
+How percentage of a theme-related words is calculated:
+```{r}
+n_tokens <- randomized %>% 
+  group_by(author) %>% 
+  count(sort = T) %>% 
+  rename(total = n) %>% 
+  arrange(author, desc = T)
+
+x <- as.vector(str_split_fixed(w2v_lists$words[1], pattern = " ", n = 30))
+
+# example how it works
+randomized %>% 
+  filter(lemma %in% x) %>% 
+  group_by(author) %>% 
+  count() %>% 
+  arrange(author, desc = T) %>% 
+  left_join(n_tokens, by = "author") %>% 
+  mutate(proc_theme = n/total) %>% 
+  rename(!!x[1]:=proc_theme)
+```
+
+```{r, warning=FALSE}
+# main counter
+x <- NULL
+y <- NULL
+themes <- NULL
+w2v_results <- list()
+
+for (i in 1:nrow(w2v_lists)) {
+  # select list of words
+  x <- as.vector(str_split_fixed(w2v_lists$words[i], pattern = " ", n = 30))
+  
+  # save theme name
+  themes[i] <- x[1]
+  
+  # count number of words related
+  y <- randomized %>% 
+  filter(lemma %in% x) %>% 
+  group_by(author) %>% 
+  count() %>% 
+  arrange(author, desc = T) %>% 
+  left_join(n_tokens, by = "author") %>% 
+  mutate(proc_theme = n/total)
+  
+  # store results
+  w2v_results[[i]] <- y$proc_theme
+}
+
+w2v_results
+#themes
+
+# table pivoting
+w2v_results_t <- as.tibble(do.call(rbind, w2v_results))
+colnames(w2v_results_t) <- as.vector(n_tokens$author)
+
+w2v_results_t$theme <- themes
+
+w2v_results_t
+
+w2v_fin <- w2v_results_t %>% 
+  pivot_longer(!theme, names_to = "author", values_to = "proc_theme") %>% 
+  pivot_wider(names_from = theme, values_from = proc_theme)
+
+w2v_fin
+
+# write.csv(w2v_fin, "data/w2v_perc_table.csv")
+```
+
+Merge all results together
+```{r}
+# glimpse(morphology)
+# glimpse(abstract_concrete)
+# glimpse(w2v_fin)
+
+# x <- as.data.frame(summary(w2v_fin))
+# x
+
+main_results <- morphology %>% 
+  left_join(abstract_concrete, by = "author") %>% 
+  left_join(w2v_fin, by = "author") %>% 
+  mutate(author = str_replace_all(author, "(\\w)(\\w)(\\w)$", "\\1 \\2\\.\\3\\."))
+
+head(main_results)
+
+```
+
+```{r}
+# lables
+ids <- main_results$author
+genders <- main_results$gender
+```
+
+```{r}
+# very fast projection for everything (should be messy??)
+
+t <- main_results %>% select(-author, -gender, -n_poems, -n_tokens)
+
+values_matrix <- t %>% 
+  as.matrix() 
+
+distances <- dist(values_matrix, method = "euclidean") 
+
+# distances <- wide %>%
+#   as.matrix() %>% 
+#   JSD(unit="log2") %>% 
+#   `rownames<-`(ids) 
+
+mds <- cmdscale(distances, eig = TRUE, k = 2)
+
+proj <- tibble(x = mds$points[,1], 
+               y = mds$points[,2],
+               author = ids, # does this work the same as `rownames<-`(ids) ??
+               gender = genders)
+  
+               
+proj %>% 
+  ggplot(aes(x, y, color = gender)) + 
+  geom_point(data = proj, aes(x, y)) + 
+  geom_text_repel(aes(label = author)) +
+  theme(legend.position = "None")
+
+```
+Projection only on POS features
+```{r, echo = F}
+t <- morphology %>% select(-author)
+
+values_matrix <- t %>% 
+  as.matrix() 
+
+distances <- dist(values_matrix, method = "euclidean") 
+
+# distances <- wide %>%
+#   as.matrix() %>% 
+#   JSD(unit="log2") %>% 
+#   `rownames<-`(ids) 
+
+mds <- cmdscale(distances, eig = TRUE, k = 2)
+
+proj <- tibble(x = mds$points[,1], 
+               y = mds$points[,2],
+               author = ids, # does this work the same as `rownames<-`(ids) ??
+               gender = genders)
+  
+               
+proj %>% 
+  ggplot(aes(x, y, color = gender)) + 
+  geom_point(data = proj, aes(x, y), color = wes_palette("Rushmore1")[4]) + 
+  geom_label_repel(aes(label = author),
+                  box.padding = 1.2, 
+                  max.overlaps = Inf,
+                  ) + 
+  theme(legend.position = "None") + 
+  labs(title = "Projection based on female-POS usage")
+
+```
+```{r, echo=FALSE, warning=FALSE}
+t <- w2v_fin %>% select(-author)
+
+values_matrix <- t %>% 
+  as.matrix() 
+
+distances <- dist(values_matrix, method = "euclidean") 
+
+# distances <- wide %>%
+#   as.matrix() %>% 
+#   JSD(unit="log2") %>% 
+#   `rownames<-`(ids) 
+
+mds <- cmdscale(distances, eig = TRUE, k = 2)
+
+proj <- tibble(x = mds$points[,1], 
+               y = mds$points[,2],
+               author = ids, # does this work the same as `rownames<-`(ids) ??
+               gender = genders)
+  
+               
+proj %>% 
+  ggplot(aes(x, y, color = gender)) + 
+  geom_point(data = proj, aes(x, y)) + 
+  geom_text_repel(aes(label = author)) +
+  theme(legend.position = "None") + 
+  labs(title = "Projection based on the usage of thematic words")
+
+```
+
+#### Grouping w2v features to 5 groups
+```{r, include = TRUE}
+female <- rowMeans(w2v_fin[, c("любовь", "дом", "семья", "цветок", "бал")])
+body <- rowMeans(w2v_fin[, c("уста", "грудь", "глаз", "лобзание")])
+poetry <- rowMeans(w2v_fin[, c("поэт", "муза", "лира")])
+war <- rowMeans(w2v_fin[, c("война", "русский", "страна", "служить")])
+sorrow <- rowMeans(w2v_fin[, c("смерть", "печаль")])
+
+prop_f_pron <- rowMeans(morphology[, c("prop_f_apro", "prop_f_spro")])
+
+grouped_results <- morphology %>% 
+  left_join(abstract_concrete, by = "author") %>% 
+  cbind(female, body, poetry, war, sorrow, prop_f_pron) %>% 
+  select(-prop_f_apro, -prop_f_spro)
+
+glimpse(grouped_results)
+
+grouped_results <- grouped_results %>% 
+  filter(author != "Смирнова А.")
+
+ids <- grouped_results$author
+genders <- grouped_results$gender
+```
+
+```{r}
+t <- grouped_results %>% select(-author, -gender, -n_poems, -n_tokens)
+
+values_matrix <- t %>% 
+  as.matrix() 
+
+distances <- dist(values_matrix, method = "euclidean") 
+
+# distances <- wide %>%
+#   as.matrix() %>% 
+#   JSD(unit="log2") %>% 
+#   `rownames<-`(ids) 
+
+mds <- cmdscale(distances, eig = TRUE, k = 2)
+
+proj <- tibble(x = mds$points[,1], 
+               y = mds$points[,2],
+               author = ids, # does this work the same as `rownames<-`(ids) ??
+               gender = genders)
+  
+               
+proj %>% 
+  ggplot(aes(x, y, color = gender)) + 
+  geom_point(data = proj, aes(x, y)) + 
+  geom_text_repel(aes(label = author)) + 
+  # geom_label_repel(aes(label = author),
+  #                 box.padding = 1,
+  #                 #max.overlaps = Inf,
+  #                 ) +
+  theme(legend.position = "None") + 
+  labs(title = "Projection based on the grouped features") + 
+  scale_fill_manual(values = c(wes_palette("Rushmore1")[5], wes_palette("Rushmore1")[4])) +
+  scale_color_manual(values = c(wes_palette("Rushmore1")[5], wes_palette("Rushmore1")[4]))
+```
+
+```{r}
+# ggsave("../plots/projection.png", plot = last_plot(), width = 8, height = 6, dpi = 300, bg = "white")
+
+# write.csv(grouped_results, "../data/02_2_grouped_results.csv")
+
+summary(grouped_results)
+```
+
+```{r}
+glimpse(grouped_results)
+
+fem_pos <- rowMeans(grouped_results[, c("prop_f_nouns", "prop_f_adj", "prop_f_verb", "prop_f_pron")])
+
+grouped_results %>% 
+  select(author, gender, female) %>% 
+  cbind(fem_pos) %>% 
+  ggplot(aes(x = fem_pos, y = female, color = gender)) + 
+  geom_point() + 
+  geom_text_repel(aes(label = author))
+
+```
+
+```{r}
+grouped_results %>% 
+  select(author, gender, mean_ac) %>% 
+  cbind(fem_pos) %>% 
+  ggplot(aes(x = fem_pos, y = mean_ac, color = gender)) + 
+  geom_point() + 
+  geom_text_repel(aes(label = author))
+```
+
+```{r}
+grouped_results %>% 
+  select(author, gender, war) %>% 
+  cbind(fem_pos) %>% 
+  ggplot(aes(x = fem_pos, y = war, color = gender)) + 
+  geom_point() + 
+  geom_text_repel(aes(label = author))
+```
+
+```{r}
+grouped_results %>% 
+  select(author, gender, body) %>% 
+  cbind(fem_pos) %>% 
+  ggplot(aes(x = fem_pos, y = body, color = gender)) + 
+  geom_point() + 
+  geom_text_repel(aes(label = author))
+```
+

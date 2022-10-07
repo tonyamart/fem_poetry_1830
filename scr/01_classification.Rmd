@@ -1,0 +1,607 @@
+---
+title: "01_classification"
+output:
+  html_document:
+    df_print: paged
+---
+
+This notebook explores if simple classification of men's and women's poems is possible.  
+Data:  
+- Corpus of poems published between 1835 to 1840 (mostly poems published in periodicals + poetry collections published by women);  
+  
+The method to be used:  SVM classification based on MFW (only iambic poems selected vs all meters), different number of MFW ranges.
+
+```{r, echo=FALSE, message=FALSE, include=TRUE}
+library(tidyverse)
+library(tidytext)
+
+library(e1071)
+library(caret)
+
+library(wesanderson)
+theme_set(theme_minimal())
+```
+
+Load and overview data:
+```{r}
+corpus <- read.csv("../data/01_corpus.csv")
+```
+
+```{r}
+# unique(corpus$source)
+
+# check number and authors of collections in the corpus
+corpus %>% 
+  filter(source == "c") %>% 
+  select(Author_name, Year, gender) %>% 
+  distinct()
+
+# number of texts with known authors
+corpus %>% 
+  filter(Author_name != "Смирнова А.") %>% 
+  #filter(!is.na(Author_name)) %>% 
+  group_by(gender) %>% 
+  count()
+
+corpus %>% 
+  # filter Smirnova imposter
+  filter(Author_name != "Смирнова А.") %>% 
+  #select(Author_name, text_lemm, gender) %>% 
+  #unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  filter(!is.na(Author_name)) %>% 
+  group_by(Author_name, gender) %>% 
+  count(sort = T) %>% 
+  ungroup() %>% 
+  group_by(gender) %>% 
+  top_n(20) %>% 
+  ggplot(aes(x = reorder_within(Author_name, n, gender), y = n, fill = gender)) + 
+  geom_col() + 
+  scale_x_reordered() +
+  coord_flip() + facet_wrap(~gender, scales = "free") + 
+  scale_fill_manual(values = wes_palette("Rushmore1")[3:4]) + 
+  labs(x = "Author", y = "Number of texts")
+
+```
+
+
+Number of poems by gender and meter
+```{r}
+corpus %>% 
+  filter(!is.na(meter)) %>% 
+  group_by(meter, gender) %>% 
+  count(sort = T) %>% 
+  ungroup() %>% 
+  group_by(gender) %>% 
+  top_n(4) %>% 
+  arrange(gender, desc = T)
+```
+  
+Number of words by different authors
+```{r}
+corpus %>% 
+  # filter Smirnova imposter
+  filter(Author_name != "Смирнова А.") %>% 
+  select(Author_name, text_lemm, gender) %>% 
+  unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  group_by(Author_name, gender) %>% 
+  count(sort = T) %>% 
+  ungroup() %>% 
+  group_by(gender) %>% 
+  top_n(10) %>% 
+  ggplot(aes(x = reorder_within(Author_name, n, gender), y = n, fill = gender)) + 
+  geom_col() + 
+  scale_x_reordered() +
+  coord_flip() + facet_wrap(~gender, scales = "free") + 
+  scale_fill_manual(values = wes_palette("Rushmore1")[3:4])
+```
+
+### SVM classification preparation
+
+Prepare two sets with gender labels:  
+- `corpus_full` - all poems in all meters  
+- `corpus_iambic` - only poems in iamb  
+  
+Since most of the women's poems are written in iamb, there's no big changes in the nubmer of women's texts but significant reduction in the men's ones.
+```{r}
+corpus_full <- corpus %>% 
+  filter(Author_name != "Смирнова А.") %>% 
+  select(text_ID, gender, text_lemm) %>% 
+  mutate(text_ID = paste0(gender, "_", text_ID))
+
+corpus_iambic <- corpus %>% 
+  filter(Author_name != "Смирнова А.") %>% 
+  filter(meter == "iamb") %>% 
+  select(text_ID, gender, text_lemm) %>% 
+  mutate(text_ID = paste0(gender, "_", text_ID))
+
+corpus_full$gender %>% table()
+corpus_iambic$gender %>% table()
+
+```
+```{r}
+glimpse(corpus_full)
+glimpse(corpus_iambic)
+```
+  
+Short test on how many words appear in at least 5% of texts (Argamon et al. 2009 filtering condition). The following chunk counts number of appearances in each text for each word and filter words appeared in at least 5% of texts. This is a small number of MFW, 447 words in total, therefore the usage of 400 MFW in the experiments following below is roughly comparable with the limit of 5% used by Argamon et al.   
+  
+```{r}
+test <- corpus_full %>% 
+  unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  group_by(text_ID, word) %>% 
+  count(word) %>% 
+  ungroup()
+
+# table manipulations for getting a table with number of appearances in each text by each word
+test <- test %>% 
+  mutate(n = 1) 
+
+tt <- test %>% pivot_wider(names_from = text_ID, values_from = n, values_fill = 0) 
+
+words_appearances <- tt %>% 
+  mutate(total = rowSums(across(where(is.numeric)))) %>% 
+  select(word, total) %>% 
+  mutate(n_texts = ncol(tt)) %>% 
+  # calculate percent of texts where a word appeared
+  mutate(perc_texts = round(total / n_texts, 5))
+
+words_appearances %>% 
+  filter(perc_texts > 0.0499)
+```
+
+
+  
+#### Full corpus classification
+
+Two sets:  
+- z-scores for MFW from 1 to 200 ('authorial words')
+- z-scores for MFW from 50 to 400 ('thematic words')
+```{r}
+# Calculate highly ranked words
+ranks <- corpus_full %>% 
+  unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  count(word, sort = T) %>% 
+  select(-n) %>% 
+  head(5000)
+
+head(ranks)
+
+# Calculate frequencies
+
+freqs <- corpus_full %>% 
+  unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  right_join(ranks, by = "word") %>% 
+  count(text_ID, word) %>% 
+  group_by(text_ID) %>% 
+  mutate(n = n/sum(n)) %>%  # relative freq
+  mutate(word = factor(word, levels = ranks$word)) %>% 
+  spread(key = "word", value = "n", fill = 0)
+
+# quick check
+freqs[1:10, 1:15]
+
+# z-scores matrices
+# 1 - select MFW from 1 to 300
+# 2 - MFW from 50 to 400
+
+zscores_1_200 <- freqs[,2:201] %>% 
+  as.matrix() %>% 
+  scale() %>% 
+  as_tibble()
+
+head(zscores_1_200)
+
+zscores_50_400 <- freqs[,52:401] %>% 
+  as.matrix() %>% 
+  scale() %>% 
+  as_tibble()
+
+titles200 <- freqs[,1] %>% 
+  ungroup() %>% 
+  mutate(text_id = row_number()) %>% 
+  bind_cols(zscores_1_200) %>% 
+  mutate(gender = str_extract(text_ID, "^\\w{1}"))
+
+titles400 <- freqs[,1] %>% 
+  ungroup() %>% 
+  mutate(text_id = row_number()) %>% 
+  bind_cols(zscores_50_400) %>% 
+  mutate(gender = str_extract(text_ID, "^\\w{1}"))
+
+unique(titles200$gender)
+
+# count train and test size
+n = min(corpus_full$gender %>% table)
+train_size = round(n*0.75)
+test_size = n - train_size
+
+train_size
+test_size
+```
+
+```{r}
+# Select z-scores set
+class_test <- titles200
+
+x = list()
+
+for (i in 1:10) {
+
+  train_set <- class_test %>% 
+    group_by(gender) %>% 
+    sample_n(train_size) %>% 
+    ungroup()
+  
+  test_set <- class_test %>% 
+    anti_join(train_set, by = "text_ID") %>% 
+    group_by(gender) %>% 
+    sample_n(test_size) %>% 
+    ungroup()
+  
+  # train_set[1:5, 1:5]
+  # test_set[1:5, 1:5]
+  
+  svm_model <-svm(as.factor(gender)~.,  
+                  data = train_set %>% select(-c(text_ID, text_id)),
+                  method = "C-classification", 
+                  kernel = "linear", 
+                  cost = 1, 
+                  scale = T)
+  
+  # summary(svm_model)
+  prediction <- predict(svm_model, test_set)
+  # confusionMatrix(prediction, as.factor(test_set$gender))
+  
+  # unlist(confusionMatrix(prediction, as.factor(test_set$gender))[3])[1]
+  x[i] = unlist(confusionMatrix(prediction, as.factor(test_set$gender))[3])[1]
+} 
+```
+
+```{r, echo=FALSE}
+# mfv 1-200
+x
+
+print("Mean accuracy score (MFW 1-200):")
+mean(unlist(x))
+```
+
+```{r, echo=FALSE}
+w_gender = t(svm_model$coefs) %*% svm_model$SV
+ 
+tibble(weight = w_gender[1,], word = colnames(w_gender)) %>% 
+   mutate(gender = case_when(weight > 0 ~ "Female authors", 
+                            weight < 0 ~ "Male authors")) %>%
+   group_by(gender) %>% 
+   mutate(abs = abs(weight)) %>%
+   top_n(20, abs) %>% 
+   ggplot(aes(reorder(word, abs),abs,fill = gender)) + geom_col() +
+   coord_flip() + 
+   facet_wrap(~gender, scales = "free") +
+#   theme_minimal(base_size = 16) + 
+   labs(x = "", 
+        y = "",
+        fill = "",
+        title = "Most weighted words in gender corpora",
+        subtitle = "Corpus: all poems, MFW 1-200; data from the last model") + 
+   scale_fill_manual(values = wes_palette("Rushmore1")[3:4]) + 
+   theme(legend.position = "none") + 
+#   theme(axis.text = element_text(size = 11),
+#         axis.title = element_text(size = 11),
+#         plot.title = element_text(size = 11)) + 
+#   theme(panel.border = element_blank(), 
+#         panel.grid.major = element_blank(),
+#         panel.grid.minor = element_blank()) +
+  theme(axis.line.x = element_line(color="black"),
+        axis.line.y = element_line(color="black"))
+```
+
+
+```{r}
+# Second z-scores set
+class_test <- titles400
+x = list()
+
+for (i in 1:10) {
+
+  train_set <- class_test %>% 
+    group_by(gender) %>% 
+    sample_n(train_size) %>% 
+    ungroup()
+  
+  test_set <- class_test %>% 
+    anti_join(train_set, by = "text_ID") %>% 
+    group_by(gender) %>% 
+    sample_n(test_size) %>% 
+    ungroup()
+  
+  # train_set[1:5, 1:5]
+  # test_set[1:5, 1:5]
+  
+  svm_model <-svm(as.factor(gender)~.,  
+                  data = train_set %>% select(-c(text_ID, text_id)),
+                  method = "C-classification", 
+                  kernel = "linear", 
+                  cost = 1, 
+                  scale = T)
+  
+  # summary(svm_model)
+  prediction <- predict(svm_model, test_set)
+  # confusionMatrix(prediction, as.factor(test_set$gender))
+  
+  # unlist(confusionMatrix(prediction, as.factor(test_set$gender))[3])[1]
+  x[i] = unlist(confusionMatrix(prediction, as.factor(test_set$gender))[3])[1]
+} 
+```
+
+```{r, echo = FALSE}
+# data for the z-scores 50-400
+x
+
+print("Mean accuracy score (MFW 50-400):")
+mean(unlist(x))
+```
+
+```{r, echo=FALSE}
+# confusionMatrix(prediction, as.factor(test_set$gender))
+# 
+w_gender = t(svm_model$coefs) %*% svm_model$SV
+# 
+# head(svm_model$coefs)
+# 
+# w_gender[1:5]
+
+ 
+tibble(weight = w_gender[1,], word = colnames(w_gender)) %>% 
+   mutate(gender = case_when(weight > 0 ~ "Female authors", 
+                            weight < 0 ~ "Male authors")) %>%
+   group_by(gender) %>% 
+   mutate(abs = abs(weight)) %>%
+   top_n(20, abs) %>% 
+   ggplot(aes(reorder(word, abs),abs,fill = gender)) + geom_col() +
+   coord_flip() + 
+   facet_wrap(~gender, scales = "free") +
+#   theme_minimal(base_size = 16) + 
+   labs(x = "", 
+        y = "",
+        fill = "",
+        title = "Most weighted words in gender corpora",
+        subtitle = "Corpus: all poems, MFW 50-400; data from the last model") + 
+   scale_fill_manual(values = wes_palette("Rushmore1")[3:4]) + 
+   theme(legend.position = "none") + 
+#   theme(axis.text = element_text(size = 11),
+#         axis.title = element_text(size = 11),
+#         plot.title = element_text(size = 11)) + 
+#   theme(panel.border = element_blank(), 
+#         panel.grid.major = element_blank(),
+#         panel.grid.minor = element_blank()) +
+  theme(axis.line.x = element_line(color="black"),
+        axis.line.y = element_line(color="black"))
+```
+
+
+
+#### Similar experiment for iambic texts ####
+
+The same way of extraction MFW and selecting two sets for MFW form 1 to 200 and from 50 to 400.  
+Same 10 svm experiments results (code is echoed)
+```{r, echo = FALSE}
+# Calculate highly ranked words
+ranks_ia <- corpus_iambic %>% 
+  unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  count(word, sort = T) %>% 
+  select(-n) %>% 
+  head(5000)
+
+# head(ranks)
+
+# Calculate frequencies
+
+freqs_ia <- corpus_iambic %>% 
+  unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
+  right_join(ranks_ia, by = "word") %>% 
+  count(text_ID, word) %>% 
+  group_by(text_ID) %>% 
+  mutate(n = n/sum(n)) %>%  # relative freq
+  mutate(word = factor(word, levels = ranks_ia$word)) %>% 
+  spread(key = "word", value = "n", fill = 0)
+
+# quick check
+# freqs[1:10, 1:15]
+
+# z-scores matrices
+# 1 - select MFW from 1 to 300
+# 2 - MFW from 50 to 400
+
+zscores_1_200_ia <- freqs_ia[,2:201] %>% 
+  as.matrix() %>% 
+  scale() %>% 
+  as_tibble()
+
+zscores_50_400_ia <- freqs_ia[,52:401] %>% 
+  as.matrix() %>% 
+  scale() %>% 
+  as_tibble()
+
+titles200_ia <- freqs_ia[,1] %>% 
+  ungroup() %>% 
+  mutate(text_id = row_number()) %>% 
+  bind_cols(zscores_1_200_ia) %>% 
+  mutate(gender = str_extract(text_ID, "^\\w{1}"))
+
+titles400_ia <- freqs_ia[,1] %>% 
+  ungroup() %>% 
+  mutate(text_id = row_number()) %>% 
+  bind_cols(zscores_50_400_ia) %>% 
+  mutate(gender = str_extract(text_ID, "^\\w{1}"))
+
+unique(titles200_ia$gender)
+
+# count train and test size
+n = min(corpus_iambic$gender %>% table)
+train_size = round(n*0.75)
+test_size = n - train_size
+
+print("Train size iambic:")
+train_size
+
+print("Test size iambic:")
+test_size
+```
+```{r, echo=FALSE}
+# Select z-scores set
+class_test <- titles200_ia
+
+x = list()
+
+for (i in 1:10) {
+
+  train_set <- class_test %>% 
+    group_by(gender) %>% 
+    sample_n(train_size) %>% 
+    ungroup()
+  
+  test_set <- class_test %>% 
+    anti_join(train_set, by = "text_ID") %>% 
+    group_by(gender) %>% 
+    sample_n(test_size) %>% 
+    ungroup()
+  
+  # train_set[1:5, 1:5]
+  # test_set[1:5, 1:5]
+  
+  svm_model <-svm(as.factor(gender)~.,  
+                  data = train_set %>% select(-c(text_ID, text_id)),
+                  method = "C-classification", 
+                  kernel = "linear", 
+                  cost = 1, 
+                  scale = T)
+  
+  # summary(svm_model)
+  prediction <- predict(svm_model, test_set)
+  # confusionMatrix(prediction, as.factor(test_set$gender))
+  
+  # unlist(confusionMatrix(prediction, as.factor(test_set$gender))[3])[1]
+  x[i] = unlist(confusionMatrix(prediction, as.factor(test_set$gender))[3])[1]
+} 
+
+# mfv 1-200
+x
+
+print("Mean accuracy score (MFW 1-200, only iambic poems):")
+mean(unlist(x))
+```
+
+```{r, echo=FALSE}
+w_gender = t(svm_model$coefs) %*% svm_model$SV
+ 
+tibble(weight = w_gender[1,], word = colnames(w_gender)) %>% 
+   mutate(gender = case_when(weight > 0 ~ "Female authors", 
+                            weight < 0 ~ "Male authors")) %>%
+   group_by(gender) %>% 
+   mutate(abs = abs(weight)) %>%
+   top_n(20, abs) %>% 
+   ggplot(aes(reorder(word, abs),abs,fill = gender)) + geom_col() +
+   coord_flip() + 
+   facet_wrap(~gender, scales = "free") +
+#   theme_minimal(base_size = 16) + 
+   labs(x = "", 
+        y = "",
+        fill = "",
+        title = "Most weighted words in gender corpora",
+        subtitle = "Corpus: iambic poems, MFW 1-200; data from the last model") + 
+   scale_fill_manual(values = wes_palette("Rushmore1")[3:4]) + 
+   theme(legend.position = "none") + 
+#   theme(axis.text = element_text(size = 11),
+#         axis.title = element_text(size = 11),
+#         plot.title = element_text(size = 11)) + 
+#   theme(panel.border = element_blank(), 
+#         panel.grid.major = element_blank(),
+#         panel.grid.minor = element_blank()) +
+  theme(axis.line.x = element_line(color="black"),
+        axis.line.y = element_line(color="black"))
+```
+
+
+```{r, echo = FALSE}
+# Second z-scores set
+class_test <- titles400_ia
+x = list()
+
+for (i in 1:10) {
+
+  train_set <- class_test %>% 
+    group_by(gender) %>% 
+    sample_n(train_size) %>% 
+    ungroup()
+  
+  test_set <- class_test %>% 
+    anti_join(train_set, by = "text_ID") %>% 
+    group_by(gender) %>% 
+    sample_n(test_size) %>% 
+    ungroup()
+  
+  # train_set[1:5, 1:5]
+  # test_set[1:5, 1:5]
+  
+  svm_model <-svm(as.factor(gender)~.,  
+                  data = train_set %>% select(-c(text_ID, text_id)),
+                  method = "C-classification", 
+                  kernel = "linear", 
+                  cost = 1, 
+                  scale = T)
+  
+  # summary(svm_model)
+  prediction <- predict(svm_model, test_set)
+  # confusionMatrix(prediction, as.factor(test_set$gender))
+  
+  # unlist(confusionMatrix(prediction, as.factor(test_set$gender))[3])[1]
+  x[i] = unlist(confusionMatrix(prediction, as.factor(test_set$gender))[3])[1]
+} 
+
+
+# data for the z-scores 50-400
+x
+
+print("Mean accuracy score (MFW 50-400, iambic poems):")
+mean(unlist(x))
+```
+```{r, echo=FALSE}
+# confusionMatrix(prediction, as.factor(test_set$gender))
+# 
+w_gender = t(svm_model$coefs) %*% svm_model$SV
+# 
+# head(svm_model$coefs)
+# 
+# w_gender[1:5]
+
+ 
+tibble(weight = w_gender[1,], word = colnames(w_gender)) %>% 
+   mutate(gender = case_when(weight > 0 ~ "Female authors", 
+                            weight < 0 ~ "Male authors")) %>%
+   group_by(gender) %>% 
+   mutate(abs = abs(weight)) %>%
+   top_n(20, abs) %>% 
+   ggplot(aes(reorder(word, abs),abs,fill = gender)) + geom_col() +
+   coord_flip() + 
+   facet_wrap(~gender, scales = "free") +
+#   theme_minimal(base_size = 16) + 
+   labs(x = "", 
+        y = "",
+        fill = "",
+        title = "Most weighted words in gender corpora",
+        subtitle = "Corpus: iambic poems, MFW 50-400; data from the last model") + 
+   scale_fill_manual(values = wes_palette("Rushmore1")[3:4]) + 
+   theme(legend.position = "none") + 
+#   theme(axis.text = element_text(size = 11),
+#         axis.title = element_text(size = 11),
+#         plot.title = element_text(size = 11)) + 
+#   theme(panel.border = element_blank(), 
+#         panel.grid.major = element_blank(),
+#         panel.grid.minor = element_blank()) +
+  theme(axis.line.x = element_line(color="black"),
+        axis.line.y = element_line(color="black"))
+```
+
+
+
+
