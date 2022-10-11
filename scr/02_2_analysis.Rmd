@@ -505,6 +505,24 @@ proj %>%
 summary(grouped_results)
 ```
 
+```{r, eval = F}
+# scaled table
+
+dat <- read.csv("data/02_2_grouped_results.csv")
+
+glimpse(dat)
+
+dat_for_scale <- dat %>% 
+  select(-X, -author, -gender, -n_poems, -n_tokens)
+
+x <- as.data.frame(scale(dat_for_scale)) %>% mutate_if(is.numeric, round, digits = 4)
+
+dat_scaled <- cbind(dat$author, x) 
+
+# write.csv(dat_scaled, "data/02_02_grouped_results_scaled.csv")
+```
+
+
 ```{r}
 glimpse(grouped_results)
 

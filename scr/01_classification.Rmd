@@ -43,22 +43,22 @@ corpus %>%
   group_by(gender) %>% 
   count()
 
-corpus %>% 
+corpus %>%
   # filter Smirnova imposter
-  filter(Author_name != "Смирнова А.") %>% 
-  #select(Author_name, text_lemm, gender) %>% 
-  #unnest_tokens(input = text_lemm, output = word, token = "words") %>% 
-  filter(!is.na(Author_name)) %>% 
-  group_by(Author_name, gender) %>% 
-  count(sort = T) %>% 
-  ungroup() %>% 
-  group_by(gender) %>% 
-  top_n(20) %>% 
-  ggplot(aes(x = reorder_within(Author_name, n, gender), y = n, fill = gender)) + 
-  geom_col() + 
+  filter(Author_name != "Смирнова А.") %>%
+  select(Author_name, gender) %>%
+  #unnest_tokens(input = text_lemm, output = word, token = "words") %>%
+  filter(!is.na(Author_name)) %>%
+  group_by(Author_name, gender) %>%
+  count() %>%
+  ungroup() %>%
+  group_by(gender) %>%
+  top_n(20) %>%
+  ggplot(aes(x = reorder_within(Author_name, n, gender), y = n, fill = gender)) +
+  geom_col() +
   scale_x_reordered() +
-  coord_flip() + facet_wrap(~gender, scales = "free") + 
-  scale_fill_manual(values = wes_palette("Rushmore1")[3:4]) + 
+  coord_flip() + facet_wrap(~gender, scales = "free") +
+  scale_fill_manual(values = wes_palette("Rushmore1")[3:4]) +
   labs(x = "Author", y = "Number of texts")
 
 ```
@@ -154,7 +154,7 @@ words_appearances %>%
 #### Full corpus classification
 
 Two sets:  
-- z-scores for MFW from 1 to 200 ('authorial words')
+- z-scores for MFW from 1 to 100 ('authorial words')
 - z-scores for MFW from 50 to 400 ('thematic words')
 ```{r}
 # Calculate highly ranked words
@@ -181,15 +181,15 @@ freqs <- corpus_full %>%
 freqs[1:10, 1:15]
 
 # z-scores matrices
-# 1 - select MFW from 1 to 300
+# 1 - select MFW from 1 to 100
 # 2 - MFW from 50 to 400
 
-zscores_1_200 <- freqs[,2:201] %>% 
+zscores_1_100 <- freqs[,2:101] %>% 
   as.matrix() %>% 
   scale() %>% 
   as_tibble()
 
-head(zscores_1_200)
+head(zscores_1_100)
 
 zscores_50_400 <- freqs[,52:401] %>% 
   as.matrix() %>% 
@@ -199,7 +199,7 @@ zscores_50_400 <- freqs[,52:401] %>%
 titles200 <- freqs[,1] %>% 
   ungroup() %>% 
   mutate(text_id = row_number()) %>% 
-  bind_cols(zscores_1_200) %>% 
+  bind_cols(zscores_1_100) %>% 
   mutate(gender = str_extract(text_ID, "^\\w{1}"))
 
 titles400 <- freqs[,1] %>% 
@@ -225,7 +225,7 @@ class_test <- titles200
 
 x = list()
 
-for (i in 1:10) {
+for (i in 1:1000) {
 
   train_set <- class_test %>% 
     group_by(gender) %>% 
@@ -259,10 +259,18 @@ for (i in 1:10) {
 
 ```{r, echo=FALSE}
 # mfv 1-200
-x
+head(x)
 
 print("Mean accuracy score (MFW 1-200):")
 mean(unlist(x))
+```
+
+```{r, echo = FALSE}
+print("Check distribution of classification results")
+hist(unlist(x))
+
+print(quantile(unlist(x), c(0.025, 0.975)))
+print(t.test(unlist(x)))
 ```
 
 ```{r, echo=FALSE}
@@ -301,7 +309,7 @@ tibble(weight = w_gender[1,], word = colnames(w_gender)) %>%
 class_test <- titles400
 x = list()
 
-for (i in 1:10) {
+for (i in 1:1000) {
 
   train_set <- class_test %>% 
     group_by(gender) %>% 
@@ -335,11 +343,21 @@ for (i in 1:10) {
 
 ```{r, echo = FALSE}
 # data for the z-scores 50-400
-x
+head(x)
 
 print("Mean accuracy score (MFW 50-400):")
 mean(unlist(x))
 ```
+
+```{r, echo = FALSE}
+print("Check distribution of classification results")
+hist(unlist(x))
+
+print("Quantiles for 50-400")
+print(quantile(unlist(x), c(0.025, 0.975)))
+print(t.test(unlist(x)))
+```
+
 
 ```{r, echo=FALSE}
 # confusionMatrix(prediction, as.factor(test_set$gender))
@@ -412,7 +430,7 @@ freqs_ia <- corpus_iambic %>%
 # 1 - select MFW from 1 to 300
 # 2 - MFW from 50 to 400
 
-zscores_1_200_ia <- freqs_ia[,2:201] %>% 
+zscores_1_100_ia <- freqs_ia[,2:101] %>% 
   as.matrix() %>% 
   scale() %>% 
   as_tibble()
@@ -425,7 +443,7 @@ zscores_50_400_ia <- freqs_ia[,52:401] %>%
 titles200_ia <- freqs_ia[,1] %>% 
   ungroup() %>% 
   mutate(text_id = row_number()) %>% 
-  bind_cols(zscores_1_200_ia) %>% 
+  bind_cols(zscores_1_100_ia) %>% 
   mutate(gender = str_extract(text_ID, "^\\w{1}"))
 
 titles400_ia <- freqs_ia[,1] %>% 
@@ -453,7 +471,7 @@ class_test <- titles200_ia
 
 x = list()
 
-for (i in 1:10) {
+for (i in 1:1000) {
 
   train_set <- class_test %>% 
     group_by(gender) %>% 
@@ -485,10 +503,20 @@ for (i in 1:10) {
 } 
 
 # mfv 1-200
-x
+head(x)
+length(unlist(x))
 
 print("Mean accuracy score (MFW 1-200, only iambic poems):")
 mean(unlist(x))
+```
+
+```{r, echo = FALSE}
+print("Check distribution of classification results")
+hist(unlist(x))
+
+print("Quantiles for iambic 1-200")
+print(quantile(unlist(x), c(0.025, 0.975)))
+print(t.test(unlist(x)))
 ```
 
 ```{r, echo=FALSE}
@@ -527,7 +555,7 @@ tibble(weight = w_gender[1,], word = colnames(w_gender)) %>%
 class_test <- titles400_ia
 x = list()
 
-for (i in 1:10) {
+for (i in 1:1000) {
 
   train_set <- class_test %>% 
     group_by(gender) %>% 
@@ -560,11 +588,21 @@ for (i in 1:10) {
 
 
 # data for the z-scores 50-400
-x
+head(x)
 
 print("Mean accuracy score (MFW 50-400, iambic poems):")
 mean(unlist(x))
 ```
+
+```{r, echo = FALSE}
+print("Check distribution of classification results")
+hist(unlist(x))
+
+print("Quantiles for iambic 50-400")
+print(quantile(unlist(x), c(0.025, 0.975)))
+print(t.test(unlist(x)))
+```
+
 ```{r, echo=FALSE}
 # confusionMatrix(prediction, as.factor(test_set$gender))
 # 
