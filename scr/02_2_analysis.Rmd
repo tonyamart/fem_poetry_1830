@@ -68,7 +68,7 @@ base_statistics
 rm(n_poems, n_tokens, auth_gender)
 ```
 
-``` {r}
+``` {r, eval = FALSE}
 glimpse(analysis)
 
 analysis$pos %>% table()
@@ -98,7 +98,7 @@ randomized <- analysis %>%
 #write.csv(randomized, "../data/02_2_random_sample_1.csv")
 ```
 ```{r, echo = FALSE}
-# randomized <- read.csv("../data/02_2_random_sample_1.csv")
+randomized <- read.csv("../data/02_2_random_sample_1.csv") %>% select(-index_c_a)
 ```
 
 ```{r}
@@ -192,7 +192,7 @@ print("Mean values for parts of speech in feminine forms")
 means_random
 ```
 ```{r, include = F, echo = F}
-# randomized <- read.csv("data/random_sample_1.csv")
+# randomized <- read.csv("../data/02_2_random_sample_1.csv")
 ```
 
 ```{r}
@@ -232,9 +232,9 @@ randomized <- randomized %>% left_join(dictionaries, by = "lemma")
 ```{r, echo = FALSE}
 head(randomized)
 
-randomized %>% 
-  select(lemma, index_c_a) %>% 
-  filter(!is.na(index_c_a))
+# randomized %>% 
+#   select(lemma, index_c_a) %>% 
+#   filter(!is.na(index_c_a))
 ```
 
 ```{r}
@@ -261,7 +261,7 @@ n_tokens <- randomized %>%
   rename(total = n) %>% 
   arrange(author, desc = T)
 
-x <- as.vector(str_split_fixed(w2v_lists$words[1], pattern = " ", n = 30))
+x <- as.vector(str_split_fixed(w2v_lists$words[6], pattern = " ", n = 30))
 
 # example how it works
 randomized %>% 
@@ -271,7 +271,8 @@ randomized %>%
   arrange(author, desc = T) %>% 
   left_join(n_tokens, by = "author") %>% 
   mutate(proc_theme = n/total) %>% 
-  rename(!!x[1]:=proc_theme)
+  rename(!!x[1]:=proc_theme) %>% 
+  arrange(author, desc = T)
 ```
 
 ```{r, warning=FALSE}
@@ -330,6 +331,8 @@ Merge all results together
 # x <- as.data.frame(summary(w2v_fin))
 # x
 
+glimpse(morphology)
+
 main_results <- morphology %>% 
   left_join(abstract_concrete, by = "author") %>% 
   left_join(w2v_fin, by = "author") %>% 
@@ -354,11 +357,6 @@ values_matrix <- t %>%
   as.matrix() 
 
 distances <- dist(values_matrix, method = "euclidean") 
-
-# distances <- wide %>%
-#   as.matrix() %>% 
-#   JSD(unit="log2") %>% 
-#   `rownames<-`(ids) 
 
 mds <- cmdscale(distances, eig = TRUE, k = 2)
 
@@ -450,8 +448,17 @@ prop_f_pron <- rowMeans(morphology[, c("prop_f_apro", "prop_f_spro")])
 
 grouped_results <- morphology %>% 
   left_join(abstract_concrete, by = "author") %>% 
-  cbind(female, body, poetry, war, sorrow, prop_f_pron) %>% 
+  cbind(prop_f_pron) %>% 
   select(-prop_f_apro, -prop_f_spro)
+  
+  
+x <- cbind(female, body, poetry, war, sorrow)  
+x
+
+x <- tibble(author = w2v_fin$author) %>% cbind(x)
+
+grouped_results <- grouped_results %>% 
+  left_join(x, by = "author")
 
 glimpse(grouped_results)
 
@@ -470,11 +477,6 @@ values_matrix <- t %>%
 
 distances <- dist(values_matrix, method = "euclidean") 
 
-# distances <- wide %>%
-#   as.matrix() %>% 
-#   JSD(unit="log2") %>% 
-#   `rownames<-`(ids) 
-
 mds <- cmdscale(distances, eig = TRUE, k = 2)
 
 proj <- tibble(x = mds$points[,1], 
@@ -484,6 +486,7 @@ proj <- tibble(x = mds$points[,1],
   
                
 proj %>% 
+  mutate(author = str_replace_all(author, "(\\w)(\\w)(\\w)$", "\\1 \\2\\.\\3\\.")) %>% 
   ggplot(aes(x, y, color = gender)) + 
   geom_point(data = proj, aes(x, y)) + 
   geom_text_repel(aes(label = author)) + 
@@ -492,7 +495,7 @@ proj %>%
   #                 #max.overlaps = Inf,
   #                 ) +
   theme(legend.position = "None") + 
-  labs(title = "Projection based on the grouped features") + 
+  #labs(title = "Projection based on the grouped features") + 
   scale_fill_manual(values = c(wes_palette("Rushmore1")[5], wes_palette("Rushmore1")[4])) +
   scale_color_manual(values = c(wes_palette("Rushmore1")[5], wes_palette("Rushmore1")[4]))
 ```
@@ -502,24 +505,24 @@ proj %>%
 
 # write.csv(grouped_results, "../data/02_2_grouped_results.csv")
 
-summary(grouped_results)
+# summary(grouped_results)
 ```
 
-```{r, eval = F}
+```{r}
 # scaled table
 
-dat <- read.csv("data/02_2_grouped_results.csv")
+#grouped_results <- read.csv("data/02_2_grouped_results.csv")
 
-glimpse(dat)
+glimpse(grouped_results)
 
-dat_for_scale <- dat %>% 
-  select(-X, -author, -gender, -n_poems, -n_tokens)
+dat_for_scale <- grouped_results %>% 
+  select(-author, -gender, -n_poems, -n_tokens)
 
 x <- as.data.frame(scale(dat_for_scale)) %>% mutate_if(is.numeric, round, digits = 4)
 
-dat_scaled <- cbind(dat$author, x) 
+dat_scaled <- cbind(grouped_results$author, x) 
 
-# write.csv(dat_scaled, "data/02_02_grouped_results_scaled.csv")
+write.csv(dat_scaled, "../data/02_2_grouped_results_scaled.csv")
 ```
 
 
