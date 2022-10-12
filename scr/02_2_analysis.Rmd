@@ -1,21 +1,21 @@
 ---
-title: "03_Analysis"
+title: "02_2_Analysis"
 output:
   html_document:
     df_print: paged
 ---
 
-The notebook shows the process of analysis for different metrics. The corpus comprised several author's corpora:  
+The notebook shows the process of analysis for different features. The corpus comprised several author's corpora:  
   
-  8 male authors
+  8 male authors  
 - nkrja selected authors: Karamzin, Zhukovsky, Pushkin, Baratynsky, Lermontov   
-- poems published in periodicals between 1835 and 1840 by: Benediktov, Kozlov, Timofeev
+- poems published in periodicals between 1835 and 1840 by: Benediktov, Kozlov, Timofeev  
   
-  7 female authors + one mistification 
+  7 female authors + one mistification  
 - poems published between 1835 and 1840 by female authors: Rostopchina, Teplova,  Shakhova, Pavlova, Kul'man;  
 - poems by earlier women poets M. Pospelova and A. Bunina;  
-- mysterious "female prodigy" A. Smirnova.  
-
+- mysterious "female prodigy" A. Smirnova (not included in the paper)  
+  
 ```{r, echo=TRUE, comment=FALSE, include=FALSE}
 library(tidyverse)
 library(tidytext)
@@ -28,7 +28,7 @@ theme_set(theme_minimal())
 
 Basic statistics and overview of the data. Some authors have unproportionally big corpora, so I randomly select 10000 words from their corpora for further analysis.
 
-```{r}
+```{r, eval=FALSE, include=FALSE}
 getwd()
 ```
 
@@ -170,7 +170,7 @@ morphology <- left_join(
   left_join(intj %>% select(author, prop_intj), by = "author")
 
 morphology
-# write.csv(morphology, "data/morphology_random_results.csv")
+# write.csv(morphology, "../data/morphology_random_results.csv")
 ```
 
 ```{r, echo = F}
@@ -200,15 +200,16 @@ randomized <- randomized %>%
   mutate(lemma = str_extract(analysis, "\\[\\{'lex': '.*?',")) %>% 
   mutate(lemma = str_remove_all(lemma, "[[:punct:]]|lex|[[:space:]]")) 
 ```
+
 ``` {r, echo = FALSE}
 print("extract lemmas from analysis")
 randomized %>% 
   select(word, lemma) %>% 
   head()
 ```
-
-NB! These dictionaries for abstractness / concreteness indexes were prepared by a research group from Kazan Federal University; current lists are publicly available and can be found at: https://kpfu.ru/tehnologiya-sozdaniya-semanticheskih-elektronnyh.html  
-On methodology of lists compilation see: Solovyev V.D., Volskaya Y.A., Andreeva M.I., Zaikin A.A. (2022). "Russian dictionary with concreteness/abstractness indices." Russian Journal for Linguistics, 26-2, 515-549.  
+  
+NB! The dictionaries for abstractness / concreteness indexes were prepared by a research group from Kazan Federal University; current lists are publicly available and can be found at: https://kpfu.ru/tehnologiya-sozdaniya-semanticheskih-elektronnyh.html  
+On methodology of lists compilation, see: Solovyev V.D., Volskaya Y.A., Andreeva M.I., Zaikin A.A. (2022). "Russian dictionary with concreteness/abstractness indices." Russian Journal for Linguistics, 26-2, 515-549.  
   
 ```{r}
 # Abstractness / concreteness dictionaries cleaning & merge
@@ -216,6 +217,7 @@ dict_adj <- read.delim("../data/dicts/adj_concreteness.csv", sep = ";") %>%
   mutate(word = str_remove_all(word, "[[:punct:]]|[[:space:]]"), 
          index_c_a = str_replace_all(index_c_a, ",", "\\.")) %>% 
   mutate(index_c_a = as.numeric(index_c_a))
+
 dict_noun <- read.delim("../data/dicts/nouns_concreteness.csv", sep = ";") %>% 
   mutate(word = str_remove_all(word, "[[:punct:]]|[[:space:]]"), 
          index_c_a = str_replace_all(index_c_a, ",", "\\.")) %>% 
@@ -232,9 +234,9 @@ randomized <- randomized %>% left_join(dictionaries, by = "lemma")
 ```{r, echo = FALSE}
 head(randomized)
 
-# randomized %>% 
-#   select(lemma, index_c_a) %>% 
-#   filter(!is.na(index_c_a))
+randomized %>%
+  select(lemma, index_c_a) %>%
+  filter(!is.na(index_c_a))
 ```
 
 ```{r}
@@ -324,13 +326,6 @@ w2v_fin
 
 Merge all results together
 ```{r}
-# glimpse(morphology)
-# glimpse(abstract_concrete)
-# glimpse(w2v_fin)
-
-# x <- as.data.frame(summary(w2v_fin))
-# x
-
 glimpse(morphology)
 
 main_results <- morphology %>% 
@@ -343,13 +338,11 @@ head(main_results)
 ```
 
 ```{r}
-# lables
+# very fast projection for every feature
+
+# labels
 ids <- main_results$author
 genders <- main_results$gender
-```
-
-```{r}
-# very fast projection for everything (should be messy??)
 
 t <- main_results %>% select(-author, -gender, -n_poems, -n_tokens)
 
@@ -362,7 +355,7 @@ mds <- cmdscale(distances, eig = TRUE, k = 2)
 
 proj <- tibble(x = mds$points[,1], 
                y = mds$points[,2],
-               author = ids, # does this work the same as `rownames<-`(ids) ??
+               author = ids, 
                gender = genders)
   
                
@@ -373,7 +366,8 @@ proj %>%
   theme(legend.position = "None")
 
 ```
-Projection only on POS features
+  
+Projection only on POS features  
 ```{r, echo = F}
 t <- morphology %>% select(-author)
 
@@ -382,16 +376,11 @@ values_matrix <- t %>%
 
 distances <- dist(values_matrix, method = "euclidean") 
 
-# distances <- wide %>%
-#   as.matrix() %>% 
-#   JSD(unit="log2") %>% 
-#   `rownames<-`(ids) 
-
 mds <- cmdscale(distances, eig = TRUE, k = 2)
 
 proj <- tibble(x = mds$points[,1], 
                y = mds$points[,2],
-               author = ids, # does this work the same as `rownames<-`(ids) ??
+               author = ids, 
                gender = genders)
   
                
@@ -414,16 +403,11 @@ values_matrix <- t %>%
 
 distances <- dist(values_matrix, method = "euclidean") 
 
-# distances <- wide %>%
-#   as.matrix() %>% 
-#   JSD(unit="log2") %>% 
-#   `rownames<-`(ids) 
-
 mds <- cmdscale(distances, eig = TRUE, k = 2)
 
 proj <- tibble(x = mds$points[,1], 
                y = mds$points[,2],
-               author = ids, # does this work the same as `rownames<-`(ids) ??
+               author = ids, 
                gender = genders)
   
                
@@ -465,11 +449,12 @@ glimpse(grouped_results)
 grouped_results <- grouped_results %>% 
   filter(author != "Смирнова А.")
 
-ids <- grouped_results$author
-genders <- grouped_results$gender
 ```
 
 ```{r}
+ids <- grouped_results$author
+genders <- grouped_results$gender
+
 t <- grouped_results %>% select(-author, -gender, -n_poems, -n_tokens)
 
 values_matrix <- t %>% 
@@ -481,7 +466,7 @@ mds <- cmdscale(distances, eig = TRUE, k = 2)
 
 proj <- tibble(x = mds$points[,1], 
                y = mds$points[,2],
-               author = ids, # does this work the same as `rownames<-`(ids) ??
+               author = ids, 
                gender = genders)
   
                
@@ -501,17 +486,17 @@ proj %>%
 ```
 
 ```{r}
-# ggsave("../plots/projection.png", plot = last_plot(), width = 8, height = 6, dpi = 300, bg = "white")
+ggsave("../plots/projection.png", plot = last_plot(), width = 8, height = 6, dpi = 300, bg = "white")
 
-# write.csv(grouped_results, "../data/02_2_grouped_results.csv")
+write.csv(grouped_results, "../data/02_2_grouped_results.csv")
 
-# summary(grouped_results)
+#summary(grouped_results)
 ```
 
 ```{r}
 # scaled table
 
-#grouped_results <- read.csv("data/02_2_grouped_results.csv")
+#grouped_results <- read.csv("../data/02_2_grouped_results.csv")
 
 glimpse(grouped_results)
 
@@ -521,6 +506,8 @@ dat_for_scale <- grouped_results %>%
 x <- as.data.frame(scale(dat_for_scale)) %>% mutate_if(is.numeric, round, digits = 4)
 
 dat_scaled <- cbind(grouped_results$author, x) 
+
+dat_scaled
 
 write.csv(dat_scaled, "../data/02_2_grouped_results_scaled.csv")
 ```
